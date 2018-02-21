@@ -1,15 +1,19 @@
-// I/O Registers definitions
+#define F_CPU 7378200UL
+#define BAUD_L 115200L
+#define BSCALE 1
+
 #include <avr/io.h>
 #include <avr/interrupt.h>
-
-// Declare your global variables here
+#include <util/delay.h>
+#include <stdio.h>
+#include "serial.h"
 
 // System Clocks initialization
 void system_clocks_init(void)
 {
 	unsigned char n,s;
 
-	// Optimize for speed
+	// Save interrupts enabled/disabled state
 	s=SREG;
 	// Disable interrupts
 	asm("cli");
@@ -470,297 +474,20 @@ void led_state(uint8_t state) {
 		case 1:
 			PORTB.OUT |= 0x04;
 		break;
+		case 2:
+			PORTB.OUT ^= 0x04;
+		break;
 		default: break;
 	}
-}
-
-// USARTC0 initialization
-void usartc0_init(void)
-{
-	// Note: The correct PORTC direction for the RxD, TxD and XCK signals
-	// is configured in the ports_init function.
-
-	// Transmitter is enabled
-	// Set TxD=1
-	PORTC.OUTSET=0x08;
-
-	// Communication mode: Asynchronous USART
-	// Data bits: 8
-	// Stop bits: 1
-	// Parity: Disabled
-	USARTC0.CTRLC=USART_CMODE_ASYNCHRONOUS_gc | USART_PMODE_DISABLED_gc | USART_CHSIZE_8BIT_gc;
-
-	// Receive complete interrupt: Low Level
-	// Transmit complete interrupt: Low Level
-	// Data register empty interrupt: Disabled
-	USARTC0.CTRLA=(USARTC0.CTRLA & (~(USART_RXCINTLVL_gm | USART_TXCINTLVL_gm | USART_DREINTLVL_gm))) |
-	USART_RXCINTLVL_LO_gc | USART_TXCINTLVL_LO_gc | USART_DREINTLVL_OFF_gc;
-
-	// Required Baud rate: 115200
-	// Real Baud Rate: 115200.0 (x1 Mode), Error: 0.0 %
-	USARTC0.BAUDCTRLA=0x80;
-	USARTC0.BAUDCTRLB=((0x09 << USART_BSCALE_gp) & USART_BSCALE_gm) | 0x01;
-
-	// Receiver: On
-	// Transmitter: On
-	// Double transmission speed mode: Off
-	// Multi-processor communication mode: Off
-	USARTC0.CTRLB=(USARTC0.CTRLB & (~(USART_RXEN_bm | USART_TXEN_bm | USART_CLK2X_bm | USART_MPCM_bm | USART_TXB8_bm))) |
-	USART_RXEN_bm | USART_TXEN_bm;
-}
-
-// USARTC0 Receiver buffer
-#define RX_BUFFER_SIZE_USARTC0 256
-char rx_buffer_usartc0[RX_BUFFER_SIZE_USARTC0];
-
-#if RX_BUFFER_SIZE_USARTC0 <= 256
-volatile unsigned char rx_wr_index_usartc0=0,rx_rd_index_usartc0=0;
-#else
-volatile unsigned int rx_wr_index_usartc0=0,rx_rd_index_usartc0=0;
-#endif
-
-#if RX_BUFFER_SIZE_USARTC0 < 256
-volatile unsigned char rx_counter_usartc0=0;
-#else
-volatile unsigned int rx_counter_usartc0=0;
-#endif
-
-// This flag is set on USARTC0 Receiver buffer overflow
-uint8_t rx_buffer_overflow_usartc0=0;
-
-// USARTC0 Receiver interrupt service routine
-ISR(USARTC0_RXC_vect)
-{
-	unsigned char status;
-	char data;
-
-	status=USARTC0.STATUS;
-	data=USARTC0.DATA;
-	if ((status & (USART_FERR_bm | USART_PERR_bm | USART_BUFOVF_bm)) == 0)
-	{
-		rx_buffer_usartc0[rx_wr_index_usartc0++]=data;
-		#if RX_BUFFER_SIZE_USARTC0 == 256
-		// special case for receiver buffer size=256
-		if (++rx_counter_usartc0 == 0) rx_buffer_overflow_usartc0=1;
-		#else
-		if (rx_wr_index_usartc0 == RX_BUFFER_SIZE_USARTC0) rx_wr_index_usartc0=0;
-		if (++rx_counter_usartc0 == RX_BUFFER_SIZE_USARTC0)
-		{
-			rx_counter_usartc0=0;
-			rx_buffer_overflow_usartc0=1;
-		}
-		#endif
-	}
-}
-
-// Receive a character from USARTC0
-char getchar_usartc0(void)
-{
-	char data;
-	
-	while (rx_counter_usartc0==0);
-	data=rx_buffer_usartc0[rx_rd_index_usartc0++];
-	#if RX_BUFFER_SIZE_USARTC0 != 256
-	if (rx_rd_index_usartc0 == RX_BUFFER_SIZE_USARTC0) rx_rd_index_usartc0=0;
-	#endif
-	asm("cli");
-	--rx_counter_usartc0;
-	asm("sei");
-	return data;
-}
-
-// USARTC0 Transmitter buffer
-#define TX_BUFFER_SIZE_USARTC0 256
-char tx_buffer_usartc0[TX_BUFFER_SIZE_USARTC0];
-
-#if TX_BUFFER_SIZE_USARTC0 <= 256
-volatile unsigned char tx_wr_index_usartc0=0,tx_rd_index_usartc0=0;
-#else
-volatile unsigned int tx_wr_index_usartc0=0,tx_rd_index_usartc0=0;
-#endif
-
-#if TX_BUFFER_SIZE_USARTC0 < 256
-volatile unsigned char tx_counter_usartc0=0;
-#else
-volatile unsigned int tx_counter_usartc0=0;
-#endif
-
-// USARTC0 Transmitter interrupt service routine
-ISR(USARTC0_TXC_vect)
-{
-	if (tx_counter_usartc0)
-	{
-		--tx_counter_usartc0;
-		USARTC0.DATA=tx_buffer_usartc0[tx_rd_index_usartc0++];
-		#if TX_BUFFER_SIZE_USARTC0 != 256
-		if (tx_rd_index_usartc0 == TX_BUFFER_SIZE_USARTC0) tx_rd_index_usartc0=0;
-		#endif
-	}
-}
-
-// Write a character to the USARTC0 Transmitter buffer
-void putchar_usartc0(char c)
-{
-	while (tx_counter_usartc0 == TX_BUFFER_SIZE_USARTC0);
-	asm("cli");
-	if (tx_counter_usartc0 || ((USARTC0.STATUS & USART_DREIF_bm)==0))
-	{
-		tx_buffer_usartc0[tx_wr_index_usartc0++]=c;
-		#if TX_BUFFER_SIZE_USARTC0 != 256
-		if (tx_wr_index_usartc0 == TX_BUFFER_SIZE_USARTC0) tx_wr_index_usartc0=0;
-		#endif
-		++tx_counter_usartc0;
-	} else {
-		USARTC0.DATA = c;
-	}
-	asm("sei");
-}
-
-// USARTE0 initialization
-void usarte0_init(void)
-{
-	// Note: The correct PORTE direction for the RxD, TxD and XCK signals
-	// is configured in the ports_init function.
-
-	// Transmitter is enabled
-	// Set TxD=1
-	PORTE.OUTSET=0x08;
-
-	// Communication mode: Asynchronous USART
-	// Data bits: 8
-	// Stop bits: 1
-	// Parity: Disabled
-	USARTE0.CTRLC=USART_CMODE_ASYNCHRONOUS_gc | USART_PMODE_DISABLED_gc | USART_CHSIZE_8BIT_gc;
-
-	// Receive complete interrupt: Low Level
-	// Transmit complete interrupt: Low Level
-	// Data register empty interrupt: Disabled
-	USARTE0.CTRLA=(USARTE0.CTRLA & (~(USART_RXCINTLVL_gm | USART_TXCINTLVL_gm | USART_DREINTLVL_gm))) |
-	USART_RXCINTLVL_LO_gc | USART_TXCINTLVL_LO_gc | USART_DREINTLVL_OFF_gc;
-
-	// Required Baud rate: 115200
-	// Real Baud Rate: 115200.0 (x1 Mode), Error: 0.0 %
-	USARTE0.BAUDCTRLA=0x80;
-	USARTE0.BAUDCTRLB=((0x09 << USART_BSCALE_gp) & USART_BSCALE_gm) | 0x01;
-
-	// Receiver: On
-	// Transmitter: On
-	// Double transmission speed mode: Off
-	// Multi-processor communication mode: Off
-	USARTE0.CTRLB=(USARTE0.CTRLB & (~(USART_RXEN_bm | USART_TXEN_bm | USART_CLK2X_bm | USART_MPCM_bm | USART_TXB8_bm))) |
-	USART_RXEN_bm | USART_TXEN_bm;
-}
-
-// USARTE0 Receiver buffer
-#define RX_BUFFER_SIZE_USARTE0 256
-char rx_buffer_usarte0[RX_BUFFER_SIZE_USARTE0];
-
-#if RX_BUFFER_SIZE_USARTE0 <= 256
-volatile unsigned char rx_wr_index_usarte0=0,rx_rd_index_usarte0=0;
-#else
-volatile unsigned int rx_wr_index_usarte0=0,rx_rd_index_usarte0=0;
-#endif
-
-#if RX_BUFFER_SIZE_USARTE0 < 256
-volatile unsigned char rx_counter_usarte0=0;
-#else
-volatile unsigned int rx_counter_usarte0=0;
-#endif
-
-// This flag is set on USARTE0 Receiver buffer overflow
-uint8_t rx_buffer_overflow_usarte0=0;
-
-// USARTE0 Receiver interrupt service routine
-ISR(USARTE0_RXC_vect)
-{
-	unsigned char status;
-	char data;
-
-	status=USARTE0.STATUS;
-	data=USARTE0.DATA;
-	if ((status & (USART_FERR_bm | USART_PERR_bm | USART_BUFOVF_bm)) == 0)
-	{
-		rx_buffer_usarte0[rx_wr_index_usarte0++]=data;
-		#if RX_BUFFER_SIZE_USARTE0 == 256
-		// special case for receiver buffer size=256
-		if (++rx_counter_usarte0 == 0) rx_buffer_overflow_usarte0=1;
-		#else
-		if (rx_wr_index_usarte0 == RX_BUFFER_SIZE_USARTE0) rx_wr_index_usarte0=0;
-		if (++rx_counter_usarte0 == RX_BUFFER_SIZE_USARTE0)
-		{
-			rx_counter_usarte0=0;
-			rx_buffer_overflow_usarte0=1;
-		}
-		#endif
-	}
-}
-
-// Receive a character from USARTE0
-char getchar_usarte0(void)
-{
-	char data;
-
-	while (rx_counter_usarte0==0);
-	data=rx_buffer_usarte0[rx_rd_index_usarte0++];
-	#if RX_BUFFER_SIZE_USARTE0 != 256
-	if (rx_rd_index_usarte0 == RX_BUFFER_SIZE_USARTE0) rx_rd_index_usarte0=0;
-	#endif
-	asm("cli");
-	--rx_counter_usarte0;
-	asm("sei");
-	return data;
-}
-
-// USARTE0 Transmitter buffer
-#define TX_BUFFER_SIZE_USARTE0 256
-char tx_buffer_usarte0[TX_BUFFER_SIZE_USARTE0];
-
-#if TX_BUFFER_SIZE_USARTE0 <= 256
-volatile unsigned char tx_wr_index_usarte0=0,tx_rd_index_usarte0=0;
-#else
-volatile unsigned int tx_wr_index_usarte0=0,tx_rd_index_usarte0=0;
-#endif
-
-#if TX_BUFFER_SIZE_USARTE0 < 256
-volatile unsigned char tx_counter_usarte0=0;
-#else
-volatile unsigned int tx_counter_usarte0=0;
-#endif
-
-// USARTE0 Transmitter interrupt service routine
-ISR(USARTE0_TXC_vect)
-{
-	if (tx_counter_usarte0)
-	{
-		--tx_counter_usarte0;
-		USARTE0.DATA=tx_buffer_usarte0[tx_rd_index_usarte0++];
-		#if TX_BUFFER_SIZE_USARTE0 != 256
-		if (tx_rd_index_usarte0 == TX_BUFFER_SIZE_USARTE0) tx_rd_index_usarte0=0;
-		#endif
-	}
-}
-
-// Write a character to the USARTE0 Transmitter buffer
-void putchar_usarte0(char c)
-{
-	while (tx_counter_usarte0 == TX_BUFFER_SIZE_USARTE0);
-	asm("cli");
-	if (tx_counter_usarte0 || ((USARTE0.STATUS & USART_DREIF_bm)==0))
-	{
-		tx_buffer_usarte0[tx_wr_index_usarte0++]=c;
-		#if TX_BUFFER_SIZE_USARTE0 != 256
-		if (tx_wr_index_usarte0 == TX_BUFFER_SIZE_USARTE0) tx_wr_index_usarte0=0;
-		#endif
-		++tx_counter_usarte0;
-	} else {
-		USARTE0.DATA = c;
-	}
-	asm("sei");
 }
 
 void gsm_init() {
 	PORTD.OUT=0x03;
 }
+
+SERIAL_t debug;
+SERIAL_t gsm;
+uint8_t * resp_buf;
 
 int main(void)
 {
@@ -831,47 +558,52 @@ int main(void)
 	
 	// GSM initialization
 	gsm_init();
-
-	// USARTC0 initialization
-	usartc0_init();
-
-	// USARTE0 initialization
-	usarte0_init();
+	
+	SERIAL_RET_t ret = OK;
+	
+	ret = serial_init(&debug, &USARTE0, &PORTE, (uint32_t) BAUD_L, (uint32_t) F_CPU, (uint8_t) BSCALE);
+	ret = serial_init(&gsm, &USARTC0, &PORTC, (uint32_t) BAUD_L, (uint32_t) F_CPU, (uint8_t) BSCALE);
+	ret = serial_listen(&gsm);
 
 	// Globally enable interrupts
 	asm("sei");
 	
-	uint8_t ok = 0;
+	// Welcome message
+	serial_puts(&debug, "------Init------\r");
 	
-	while (1) {
-		putchar_usartc0('A');
-		putchar_usartc0('T');
-		putchar_usartc0('\r');
+	// Sync baud rate
+	do {
+		serial_puts(&gsm, "AT\r");
 		
-		char c = getchar_usartc0();
-		
-		if (c == 'O') ok = 1;
-		if (c == 'K' && ok == 1) break;
-	}
-	
-	putchar_usarte0('O');
-	putchar_usarte0('K');
-	putchar_usarte0('\r');
-	
-	led_state(1);
-	
-	putchar_usartc0('A');
-	putchar_usartc0('T');
-	putchar_usartc0('I');
-	//putchar_usartc0('C');
-	//putchar_usartc0('P');
-	//putchar_usartc0('I');
-	//putchar_usartc0('N');
-	//putchar_usartc0('?');
-	putchar_usartc0('\r');
+		if (serial_available(&gsm)) {
+			if (sscanf_P((char *) resp_buf, "\r\nOK\r\n")) {
+				led_state(1);
+				break;
+			}
+		} else {
+			serial_gets(&gsm, resp_buf, &debug);
+		}
+	} while(1);
 
-	while (1)
-	{
-		putchar_usarte0(getchar_usartc0());
-	}
+	while (1) {}
+}
+
+// USART 0 PORTE TX interrupt
+ISR(USARTE0_TXC_vect) {
+	serial_tx_isr_handler(&debug);
+}
+
+// USART 0 PORTE RX interrupt
+ISR(USARTE0_RXC_vect) {
+	serial_rx_isr_handler(&debug);
+}
+
+// USART 0 PORTC TX interrupt
+ISR(USARTC0_TXC_vect) {
+	serial_tx_isr_handler(&gsm);
+}
+
+// USART 0 PORTC RX interrupt
+ISR(USARTC0_RXC_vect) {
+	serial_rx_isr_handler(&gsm);
 }
