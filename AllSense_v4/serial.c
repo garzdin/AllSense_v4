@@ -44,20 +44,11 @@ void serial_tx_isr_handler(SERIAL_t * serial) {
 	}
 }
 
-SERIAL_RET_t serial_set_baud (SERIAL_t * serial, uint32_t * f_cpu, uint8_t * bscale, uint32_t * baud) {
-	//uint16_t bsel;
-	//
-	//if (*bscale >= 0 && *baud <= (*f_cpu / 16)) {
-		//bsel = *f_cpu / (pow(2, *bscale) * (16 * (*baud))) - 1;
-	//} else {
-		//bsel = (1 / pow(2, *bscale) * ((*f_cpu / 16 * (*baud)) - 1));
-	//}
+SERIAL_RET_t serial_set_baud (SERIAL_t * serial, uint32_t * f_cpu, uint32_t * baud) {	
+	serial->_baud = *baud;
 	
-	serial->_usart->BAUDCTRLA = 0x80;
-	serial->_usart->BAUDCTRLB = ((0x09 << USART_BSCALE_gp) & USART_BSCALE_gm) | 0x01;
-	
-	//serial->_usart->BAUDCTRLA = (uint8_t) bsel;
-	//serial->_usart->BAUDCTRLB = (*bscale << USART_BSCALE_gp) | (bsel >> 8);
+	serial->_usart->BAUDCTRLA = (BSEL(*f_cpu, *baud) & 0xff);
+	serial->_usart->BAUDCTRLB = (((BSCALE(*f_cpu, *baud) << USART_BSCALE_gp) & USART_BSCALE_gm) | (BSEL(*f_cpu, *baud) >> 8));
 	
 	return OK;
 }
@@ -158,7 +149,7 @@ SERIAL_RET_t serial_gets (SERIAL_t * serial, uint8_t * buf, SERIAL_t * debug) {
 	return ret;
 }
 
-SERIAL_RET_t serial_init (SERIAL_t * serial, USART_t * usart, PORT_t * port, uint32_t baud, uint32_t f_cpu, uint8_t bscale) {
+SERIAL_RET_t serial_init (SERIAL_t * serial, USART_t * usart, PORT_t * port, uint32_t baud, uint32_t f_cpu) {
 	SERIAL_RET_t ret = OK;
 	
 	serial->_usart = usart;
@@ -174,7 +165,7 @@ SERIAL_RET_t serial_init (SERIAL_t * serial, USART_t * usart, PORT_t * port, uin
 	serial->_usart->CTRLA &= ~(USART_RXCINTLVL_gm | USART_TXCINTLVL_gm | USART_DREINTLVL_gm);
 	serial->_usart->CTRLA |= USART_DREINTLVL_OFF_gc | USART_TXCINTLVL_LO_gc;
 	
-	ret = serial_set_baud(serial, &f_cpu, &bscale, &baud);
+	ret = serial_set_baud(serial, &f_cpu, &baud);
 	
 	serial->_usart->CTRLB &= ~(USART_RXEN_bm | USART_TXEN_bm | USART_CLK2X_bm | USART_MPCM_bm | USART_TXB8_bm);
 	
